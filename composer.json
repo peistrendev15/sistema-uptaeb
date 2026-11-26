@@ -1,0 +1,19 @@
+{
+    "name": "sistema/gestion-usuarios",
+    "description": "Sistema de Gestion de Usuarios con MVC, POO, SOLID, AJAX y PDO",
+    "type": "project",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        },
+        "classmap": [
+            "config/",
+            "controller/",
+            "model/"
+        ]
+    },
+    "require": {
+        "php": ">=8.0"
+    }
+}
