@@ -1,114 +1,122 @@
 <?php
-require_once __DIR__ . '/../model/UserModelInterface.php';
-require_once __DIR__ . '/../model/ClientModelInterface.php';
-
 /**
- * Controlador de Usuarios (Login, Registro Público, Recuperación, Inicio y Admin)
+ * Controlador de Usuarios (PRIME FITNESS)
  * 
- * Principio SRP: Orquesta solicitudes HTTP, valida entradas y responde en JSON para AJAX.
- * Principio DIP: NO instancia directamente clases con 'new'. Recibe UserModelInterface y ClientModelInterface inyectadas desde afuera.
+ * En este archivo NO se declara ninguna clase.
+ * Únicamente se instancian las clases del Modelo, se reciben las peticiones
+ * y se llaman a los métodos de los objetos instanciados para cargar las vistas o responder a AJAX.
  */
-class UserController {
-    private UserModelInterface $model;
-    private ?ClientModelInterface $clientModel;
 
-    /**
-     * Inyección de Dependencias
-     */
-    public function __construct(UserModelInterface $model, ?ClientModelInterface $clientModel = null) {
-        if (session_status() === PHP_SESSION_NONE) {
-            session_start();
-        }
-        $this->model = $model;
-        $this->clientModel = $clientModel;
-    }
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// 1. IMPORTACIÓN DE LA BASE DE DATOS Y LOS MODELOS
+require_once __DIR__ . '/../config/dataBase.php';
+require_once __DIR__ . '/../model/userModel.php';
+require_once __DIR__ . '/../model/clientModel.php';
+
+// 2. INSTANCIACIÓN DE LAS CLASES DEL MODELO
+$db = Database::getConnection();
+$userModel = new UserModel($db);
+$clientModel = new ClientModel($db);
+
+// Lectura de datos enviados por AJAX (JSON) o formularios ($_POST)
+$rawInput = file_get_contents('php://input');
+$jsonInput = json_decode($rawInput, true);
+$data = is_array($jsonInput) ? $jsonInput : $_POST;
+
+// Acción solicitada
+$action = $_GET['action'] ?? $_POST['action'] ?? 'login';
+
+// 2. PROCESAMIENTO DE LA ACCIÓN USANDO LA INSTANCIA ($userModel)
+switch ($action) {
 
     // ==========================================
-    // 1. VISTAS DEL SISTEMA
+    // VISTAS DEL SISTEMA
     // ==========================================
-
-    /** Vista 1: Login de Usuario (Estilo Paper Dashboard) */
-    public function showLogin(): void {
+    case 'login':
         if (isset($_SESSION['user'])) {
             header('Location: index.php?action=inicio');
             exit;
         }
         require_once __DIR__ . '/../view/login.php';
-    }
+        break;
 
-    /** Vista 2: Registro Público de Cuenta */
-    public function showRegistro(): void {
+    case 'registro':
         if (isset($_SESSION['user'])) {
             header('Location: index.php?action=inicio');
             exit;
         }
         require_once __DIR__ . '/../view/registro.php';
-    }
+        break;
 
-    /** Vista 3: Recuperación Primitiva de Contraseña */
-    public function showRecuperar(): void {
+    case 'recuperar':
         require_once __DIR__ . '/../view/recuperar.php';
-    }
+        break;
 
-    /** Vista 4: MÓDULO 1 - Inicio / Overview (Dashboard con métricas) */
-    public function showInicio(): void {
+    case 'inicio':
+    case 'dashboard':
         if (!isset($_SESSION['user'])) {
             header('Location: index.php?action=login');
             exit;
         }
-        
-        $usuarios = $this->model->getUsers();
+        // Usamos las instancias para consultar las métricas
+        $usuarios = $userModel->getUsers();
         $totalUsuarios = count($usuarios);
-        $totalClientes = $this->clientModel ? $this->clientModel->countClients() : 0;
+        $totalClientes = $clientModel->countClients();
         $totalPedidos = 0;
         $ingresosMes = 0;
         $ingresosTotales = 0;
 
         require_once __DIR__ . '/../view/inicio.php';
-    }
+        break;
 
-    /** Vista 5: MÓDULO 2 - Admin (Gestión de Usuarios con Modal y AJAX) */
-    public function showAdmin(): void {
+    case 'admin':
+    case 'usuarios':
         if (!isset($_SESSION['user'])) {
             header('Location: index.php?action=login');
             exit;
         }
         require_once __DIR__ . '/../view/usuarios.php';
-    }
+        break;
 
     // ==========================================
-    // 2. AUTENTICACIÓN (LOGIN & LOGOUT)
+    // AUTENTICACIÓN (LOGIN & LOGOUT)
     // ==========================================
-
-    /** AJAX POST: Iniciar sesión */
-    public function login(): void {
-        $data = $this->getInput();
+    case 'login_auth':
+        header('Content-Type: application/json; charset=UTF-8');
         $email = trim($data['email'] ?? '');
         $password = $data['password'] ?? '';
 
         if (empty($email) || empty($password)) {
-            $this->json(422, false, 'Debes ingresar tu correo y contraseña.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Debes ingresar tu correo y contraseña.']);
+            exit;
         }
 
-        $user = $this->model->getUserByEmail($email);
+        $user = $userModel->getUserByEmail($email);
         if (!$user || !password_verify($password, $user['password'])) {
-            $this->json(401, false, 'Correo o contraseña incorrectos.');
-            return;
+            http_response_code(401);
+            echo json_encode(['success' => false, 'message' => 'Correo o contraseña incorrectos.']);
+            exit;
         }
 
-        // Crear sesión de usuario
         $_SESSION['user'] = [
             'id'    => $user['id'],
             'name'  => $user['name'],
             'email' => $user['email']
         ];
 
-        $this->json(200, true, '¡Bienvenido! Redirigiendo al panel...', ['user' => $_SESSION['user']]);
-    }
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => '¡Bienvenido! Redirigiendo al panel...',
+            'user'    => $_SESSION['user']
+        ]);
+        exit;
 
-    /** GET: Cerrar sesión */
-    public function logout(): void {
+    case 'logout':
         $_SESSION = [];
         if (ini_get("session.use_cookies")) {
             $params = session_get_cookie_params();
@@ -120,186 +128,201 @@ class UserController {
         session_destroy();
         header('Location: index.php?action=login');
         exit;
-    }
 
     // ==========================================
-    // 3. RECUPERACIÓN PRIMITIVA DE CONTRASEÑA
+    // RECUPERACIÓN PRIMITIVA DE CONTRASEÑA
     // ==========================================
-
-    /** AJAX POST: Restablecer contraseña con Correo, Nueva Contraseña y Confirmación */
-    public function restablecerClave(): void {
-        $data = $this->getInput();
-
+    case 'restablecer_clave':
+        header('Content-Type: application/json; charset=UTF-8');
         $email = trim($data['email'] ?? '');
         $nuevaClave = $data['nueva_clave'] ?? '';
         $confirmarClave = $data['confirmar_clave'] ?? '';
 
         if (empty($email) || empty($nuevaClave) || empty($confirmarClave)) {
-            $this->json(422, false, 'Todos los campos son obligatorios.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Todos los campos son obligatorios.']);
+            exit;
         }
 
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $this->json(422, false, 'Ingresa un formato de correo electrónico válido.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Ingresa un formato de correo electrónico válido.']);
+            exit;
         }
 
         if (strlen($nuevaClave) < 6) {
-            $this->json(422, false, 'La contraseña debe tener al menos 6 caracteres.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'La contraseña debe tener al menos 6 caracteres.']);
+            exit;
         }
 
         if ($nuevaClave !== $confirmarClave) {
-            $this->json(422, false, 'Las contraseñas no coinciden. Por favor verifícalas.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Las contraseñas no coinciden. Por favor verifícalas.']);
+            exit;
         }
 
-        $user = $this->model->getUserByEmail($email);
+        $user = $userModel->getUserByEmail($email);
         if (!$user) {
-            $this->json(404, false, 'No existe ningún usuario registrado con ese correo.');
-            return;
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'No existe ningún usuario registrado con ese correo.']);
+            exit;
         }
 
-        $ok = $this->model->restablecerClave($email, $nuevaClave);
+        $ok = $userModel->restablecerClave($email, $nuevaClave);
         if ($ok) {
-            $this->json(200, true, '¡Contraseña restablecida con éxito! Redirigiendo al inicio de sesión...');
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => '¡Contraseña restablecida con éxito! Redirigiendo al inicio de sesión...']);
         } else {
-            $this->json(500, false, 'Hubo un error al actualizar la contraseña en el servidor.');
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'Hubo un error al actualizar la contraseña en el servidor.']);
         }
-    }
+        exit;
 
     // ==========================================
-    // 4. CRUD Y REGISTRO DE USUARIOS (AJAX)
+    // CRUD Y REGISTRO DE USUARIOS (AJAX)
     // ==========================================
-
-    /** AJAX GET: Listar usuarios */
-    public function listar(): void {
+    case 'listar':
+        header('Content-Type: application/json; charset=UTF-8');
         try {
-            $usuarios = $this->model->getUsers();
-            $this->json(200, true, 'Lista de usuarios obtenida', ['usuarios' => $usuarios]);
+            $usuarios = $userModel->getUsers();
+            http_response_code(200);
+            echo json_encode([
+                'success'  => true,
+                'message'  => 'Lista de usuarios obtenida',
+                'usuarios' => $usuarios
+            ]);
         } catch (Throwable $e) {
-            $this->json(500, false, 'Error al listar usuarios: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'Error al listar usuarios: ' . $e->getMessage()]);
         }
-    }
+        exit;
 
-    /** AJAX GET: Obtener usuario por ID */
-    public function obtener(): void {
+    case 'obtener':
+        header('Content-Type: application/json; charset=UTF-8');
         $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
         if ($id <= 0) {
-            $this->json(400, false, 'ID inválido.');
-            return;
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'ID inválido.']);
+            exit;
         }
 
-        $usuario = $this->model->getUserById($id);
+        $usuario = $userModel->getUserById($id);
         if (!$usuario) {
-            $this->json(404, false, 'Usuario no encontrado.');
-            return;
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Usuario no encontrado.']);
+            exit;
         }
 
-        $this->json(200, true, 'Usuario obtenido', ['usuario' => $usuario]);
-    }
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Usuario obtenido',
+            'usuario' => $usuario
+        ]);
+        exit;
 
-    /** AJAX POST: Registrar nuevo usuario (Panel o Público) */
-    public function registrar(): void {
-        $data = $this->getInput();
-
+    case 'registrar':
+    case 'registrar_publico':
+        header('Content-Type: application/json; charset=UTF-8');
         $name = trim($data['name'] ?? '');
         $email = trim($data['email'] ?? '');
         $password = $data['password'] ?? '';
 
         if (empty($name) || empty($email) || empty($password)) {
-            $this->json(422, false, 'Nombre, correo y contraseña son obligatorios.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Nombre, correo y contraseña son obligatorios.']);
+            exit;
         }
 
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $this->json(422, false, 'El correo electrónico no es válido.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'El correo electrónico no es válido.']);
+            exit;
         }
 
         if (strlen($password) < 6) {
-            $this->json(422, false, 'La contraseña debe tener al menos 6 caracteres.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'La contraseña debe tener al menos 6 caracteres.']);
+            exit;
         }
 
-        if ($this->model->existeCorreo($email)) {
-            $this->json(409, false, 'El correo electrónico ya está registrado.');
-            return;
+        if ($userModel->existeCorreo($email)) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => 'El correo electrónico ya está registrado.']);
+            exit;
         }
 
-        $creado = $this->model->crear($name, $email, $password);
+        $creado = $userModel->crear($name, $email, $password);
         if ($creado) {
-            $this->json(201, true, '¡Usuario registrado correctamente!');
+            http_response_code(201);
+            echo json_encode(['success' => true, 'message' => '¡Usuario registrado correctamente!']);
         } else {
-            $this->json(500, false, 'No se pudo registrar el usuario.');
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'No se pudo registrar el usuario.']);
         }
-    }
+        exit;
 
-    /** AJAX POST: Actualizar usuario */
-    public function actualizar(): void {
-        $data = $this->getInput();
-
+    case 'actualizar':
+        header('Content-Type: application/json; charset=UTF-8');
         $id = isset($data['id']) ? (int)$data['id'] : 0;
         $name = trim($data['name'] ?? '');
         $email = trim($data['email'] ?? '');
         $password = !empty($data['password']) ? $data['password'] : null;
 
         if ($id <= 0 || empty($name) || empty($email)) {
-            $this->json(422, false, 'Datos insuficientes para actualizar.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Datos insuficientes para actualizar.']);
+            exit;
         }
 
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $this->json(422, false, 'El correo electrónico no es válido.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'El correo electrónico no es válido.']);
+            exit;
         }
 
-        if ($this->model->existeCorreo($email, $id)) {
-            $this->json(409, false, 'El correo ya pertenece a otro usuario.');
-            return;
+        if ($userModel->existeCorreo($email, $id)) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => 'El correo ya pertenece a otro usuario.']);
+            exit;
         }
 
-        $actualizado = $this->model->actualizar($id, $name, $email, $password);
+        $actualizado = $userModel->actualizar($id, $name, $email, $password);
         if ($actualizado) {
-            $this->json(200, true, '¡Usuario actualizado exitosamente!');
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => '¡Usuario actualizado exitosamente!']);
         } else {
-            $this->json(500, false, 'No se pudo actualizar el usuario.');
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'No se pudo actualizar el usuario.']);
         }
-    }
+        exit;
 
-    /** AJAX POST: Eliminar usuario */
-    public function eliminar(): void {
-        $data = $this->getInput();
+    case 'eliminar':
+        header('Content-Type: application/json; charset=UTF-8');
         $id = isset($data['id']) ? (int)$data['id'] : 0;
 
         if ($id <= 0) {
-            $this->json(400, false, 'ID inválido para eliminar.');
-            return;
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'ID inválido para eliminar.']);
+            exit;
         }
 
-        $eliminado = $this->model->eliminar($id);
+        $eliminado = $userModel->eliminar($id);
         if ($eliminado) {
-            $this->json(200, true, '¡Usuario eliminado exitosamente!');
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => '¡Usuario eliminado exitosamente!']);
         } else {
-            $this->json(500, false, 'No se pudo eliminar el usuario.');
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'No se pudo eliminar el usuario.']);
         }
-    }
-
-    /** Utilidad: Lee JSON crudo o $_POST */
-    private function getInput(): array {
-        $raw = file_get_contents('php://input');
-        $json = json_decode($raw, true);
-        return is_array($json) ? $json : $_POST;
-    }
-
-    /** Utilidad: Responde en JSON estandarizado */
-    private function json(int $status, bool $success, string $message, array $extra = []): void {
-        http_response_code($status);
-        header('Content-Type: application/json; charset=UTF-8');
-        echo json_encode(array_merge([
-            'success' => $success,
-            'message' => $message
-        ], $extra));
         exit;
-    }
+
+    default:
+        if (isset($_SESSION['user'])) {
+            header('Location: index.php?action=inicio');
+            exit;
+        }
+        require_once __DIR__ . '/../view/login.php';
+        break;
 }

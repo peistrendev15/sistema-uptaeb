@@ -1,63 +1,83 @@
 <?php
-require_once __DIR__ . '/../model/ClientModelInterface.php';
-
 /**
- * Controlador de Clientes (Portal del Cliente + CRUD Administrativo de Clientes)
+ * Controlador de Clientes (PRIME FITNESS)
  * 
- * Principio SRP: Gestiona el flujo y CRUD de los clientes.
- * Principio DIP: Depende de la abstracción ClientModelInterface inyectada por constructor.
+ * En este archivo NO se declara ninguna clase.
+ * Únicamente se instancia la clase del Modelo (ClientModel), se reciben las peticiones
+ * y se llaman a los métodos del objeto instanciado para cargar las vistas o responder a AJAX.
  */
-class ClientController {
-    private ClientModelInterface $clientModel;
 
-    public function __construct(ClientModelInterface $clientModel) {
-        if (session_status() === PHP_SESSION_NONE) {
-            session_start();
-        }
-        $this->clientModel = $clientModel;
-    }
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+// 1. IMPORTACIÓN DE LA BASE DE DATOS Y EL MODELO
+require_once __DIR__ . '/../config/dataBase.php';
+require_once __DIR__ . '/../model/clientModel.php';
+
+// 2. INSTANCIACIÓN DE LA CLASE DEL MODELO
+$db = Database::getConnection();
+$clientModel = new ClientModel($db);
+
+// Lectura de datos enviados por AJAX (JSON) o formularios ($_POST)
+$rawInput = file_get_contents('php://input');
+$jsonInput = json_decode($rawInput, true);
+$data = is_array($jsonInput) ? $jsonInput : $_POST;
+
+// Acción solicitada
+$action = $_GET['action'] ?? $_POST['action'] ?? 'cliente_login';
+
+// 2. PROCESAMIENTO DE LA ACCIÓN USANDO LA INSTANCIA ($clientModel)
+switch ($action) {
 
     // ==========================================
-    // 1. PORTAL PÚBLICO / DEL CLIENTE
+    // VISTAS DE CLIENTES
     // ==========================================
-
-    /** Vista 1: Login de Clientes (1 sola imagen fija sin transición) */
-    public function showLogin(): void {
+    case 'cliente_login':
         if (isset($_SESSION['client'])) {
             header('Location: index.php?action=cliente_dashboard');
             exit;
         }
         require_once __DIR__ . '/../view/cliente_login.php';
-    }
+        break;
 
-    /** Vista 2: Dashboard del Cliente (Muestra cantidad de pedidos solicitados e historial en 0) */
-    public function showDashboard(): void {
+    case 'cliente_dashboard':
         if (!isset($_SESSION['client'])) {
             header('Location: index.php?action=cliente_login');
             exit;
         }
-
         $pedidosSolicitados = 0;
         $historialPedidos = [];
-
         require_once __DIR__ . '/../view/cliente_dashboard.php';
-    }
+        break;
 
-    /** AJAX POST: Autenticación de Clientes */
-    public function login(): void {
-        $data = $this->getInput();
+    case 'clientes':
+        if (!isset($_SESSION['user'])) {
+            header('Location: index.php?action=login');
+            exit;
+        }
+        require_once __DIR__ . '/../view/clientes.php';
+        break;
+
+    // ==========================================
+    // AUTENTICACIÓN DEL CLIENTE
+    // ==========================================
+    case 'cliente_login_auth':
+        header('Content-Type: application/json; charset=UTF-8');
         $email = trim($data['email'] ?? '');
         $password = $data['password'] ?? '';
 
         if (empty($email) || empty($password)) {
-            $this->json(422, false, 'Debes ingresar tu correo y contraseña.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Debes ingresar tu correo y contraseña.']);
+            exit;
         }
 
-        $client = $this->clientModel->getClientByEmail($email);
+        $client = $clientModel->getClientByEmail($email);
         if (!$client || !password_verify($password, $client['password'])) {
-            $this->json(401, false, 'Correo o contraseña de cliente incorrectos.');
-            return;
+            http_response_code(401);
+            echo json_encode(['success' => false, 'message' => 'Correo o contraseña de cliente incorrectos.']);
+            exit;
         }
 
         $_SESSION['client'] = [
@@ -67,154 +87,154 @@ class ClientController {
             'created_at' => $client['created_at']
         ];
 
-        $this->json(200, true, '¡Bienvenido a PRIME FITNESS!', ['client' => $_SESSION['client']]);
-    }
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => '¡Bienvenido a PRIME FITNESS!',
+            'client'  => $_SESSION['client']
+        ]);
+        exit;
 
-    /** GET: Cerrar sesión de cliente */
-    public function logout(): void {
+    case 'cliente_logout':
         unset($_SESSION['client']);
         header('Location: index.php?action=cliente_login');
         exit;
-    }
 
     // ==========================================
-    // 2. MÓDULO DE CLIENTES EN EL PANEL ADMIN
+    // CRUD ADMINISTRATIVO DE CLIENTES (AJAX)
     // ==========================================
-
-    /** Vista 3: Módulo de Gestión de Clientes en el Dashboard Admin */
-    public function showAdminClientes(): void {
-        if (!isset($_SESSION['user'])) {
-            header('Location: index.php?action=login');
-            exit;
-        }
-        require_once __DIR__ . '/../view/clientes.php';
-    }
-
-    /** AJAX GET: Listar todos los clientes */
-    public function listar(): void {
+    case 'cliente_listar':
+        header('Content-Type: application/json; charset=UTF-8');
         try {
-            $clientes = $this->clientModel->getClients();
-            $this->json(200, true, 'Lista de clientes obtenida', ['clientes' => $clientes]);
+            $clientes = $clientModel->getClients();
+            http_response_code(200);
+            echo json_encode([
+                'success'  => true,
+                'message'  => 'Lista de clientes obtenida',
+                'clientes' => $clientes
+            ]);
         } catch (Throwable $e) {
-            $this->json(500, false, 'Error al listar clientes: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'Error al listar clientes: ' . $e->getMessage()]);
         }
-    }
+        exit;
 
-    /** AJAX GET: Obtener un cliente por ID */
-    public function obtener(): void {
+    case 'cliente_obtener':
+        header('Content-Type: application/json; charset=UTF-8');
         $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
         if ($id <= 0) {
-            $this->json(400, false, 'ID de cliente inválido.');
-            return;
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'ID de cliente inválido.']);
+            exit;
         }
 
-        $cliente = $this->clientModel->getClientById($id);
+        $cliente = $clientModel->getClientById($id);
         if (!$cliente) {
-            $this->json(404, false, 'Cliente no encontrado.');
-            return;
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Cliente no encontrado.']);
+            exit;
         }
 
-        $this->json(200, true, 'Cliente obtenido', ['cliente' => $cliente]);
-    }
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Cliente obtenido',
+            'cliente' => $cliente
+        ]);
+        exit;
 
-    /** AJAX POST: Registrar nuevo cliente */
-    public function registrar(): void {
-        $data = $this->getInput();
+    case 'cliente_registrar':
+        header('Content-Type: application/json; charset=UTF-8');
         $name = trim($data['name'] ?? '');
         $email = trim($data['email'] ?? '');
         $password = $data['password'] ?? '';
 
         if (empty($name) || empty($email) || empty($password)) {
-            $this->json(422, false, 'Nombre, correo y contraseña son obligatorios.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Nombre, correo y contraseña son obligatorios.']);
+            exit;
         }
 
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $this->json(422, false, 'El correo electrónico no es válido.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'El correo electrónico no es válido.']);
+            exit;
         }
 
         if (strlen($password) < 6) {
-            $this->json(422, false, 'La contraseña debe tener mínimo 6 caracteres.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'La contraseña debe tener mínimo 6 caracteres.']);
+            exit;
         }
 
-        if ($this->clientModel->existeCorreo($email)) {
-            $this->json(409, false, 'Este correo ya está registrado como cliente.');
-            return;
+        if ($clientModel->existeCorreo($email)) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => 'Este correo ya está registrado como cliente.']);
+            exit;
         }
 
-        $ok = $this->clientModel->crear($name, $email, $password);
+        $ok = $clientModel->crear($name, $email, $password);
         if ($ok) {
-            $this->json(201, true, '¡Cliente registrado exitosamente!');
+            http_response_code(201);
+            echo json_encode(['success' => true, 'message' => '¡Cliente registrado exitosamente!']);
         } else {
-            $this->json(500, false, 'No se pudo registrar el cliente.');
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'No se pudo registrar el cliente.']);
         }
-    }
+        exit;
 
-    /** AJAX POST: Actualizar cliente */
-    public function actualizar(): void {
-        $data = $this->getInput();
-
+    case 'cliente_actualizar':
+        header('Content-Type: application/json; charset=UTF-8');
         $id = isset($data['id']) ? (int)$data['id'] : 0;
         $name = trim($data['name'] ?? '');
         $email = trim($data['email'] ?? '');
         $password = !empty($data['password']) ? $data['password'] : null;
 
         if ($id <= 0 || empty($name) || empty($email)) {
-            $this->json(422, false, 'Datos insuficientes para actualizar el cliente.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'Datos insuficientes para actualizar el cliente.']);
+            exit;
         }
 
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $this->json(422, false, 'El correo electrónico no es válido.');
-            return;
+            http_response_code(422);
+            echo json_encode(['success' => false, 'message' => 'El correo electrónico no es válido.']);
+            exit;
         }
 
-        if ($this->clientModel->existeCorreo($email, $id)) {
-            $this->json(409, false, 'El correo ya pertenece a otro cliente.');
-            return;
+        if ($clientModel->existeCorreo($email, $id)) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => 'El correo ya pertenece a otro cliente.']);
+            exit;
         }
 
-        $actualizado = $this->clientModel->actualizar($id, $name, $email, $password);
+        $actualizado = $clientModel->actualizar($id, $name, $email, $password);
         if ($actualizado) {
-            $this->json(200, true, '¡Cliente actualizado exitosamente!');
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => '¡Cliente actualizado exitosamente!']);
         } else {
-            $this->json(500, false, 'No se pudo actualizar el cliente.');
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'No se pudo actualizar el cliente.']);
         }
-    }
+        exit;
 
-    /** AJAX POST: Eliminar cliente */
-    public function eliminar(): void {
-        $data = $this->getInput();
+    case 'cliente_eliminar':
+        header('Content-Type: application/json; charset=UTF-8');
         $id = isset($data['id']) ? (int)$data['id'] : 0;
 
         if ($id <= 0) {
-            $this->json(400, false, 'ID inválido para eliminar.');
-            return;
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'ID inválido para eliminar.']);
+            exit;
         }
 
-        $eliminado = $this->clientModel->eliminar($id);
+        $eliminado = $clientModel->eliminar($id);
         if ($eliminado) {
-            $this->json(200, true, '¡Cliente eliminado exitosamente!');
+            http_response_code(200);
+            echo json_encode(['success' => true, 'message' => '¡Cliente eliminado exitosamente!']);
         } else {
-            $this->json(500, false, 'No se pudo eliminar el cliente.');
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'No se pudo eliminar el cliente.']);
         }
-    }
-
-    private function getInput(): array {
-        $raw = file_get_contents('php://input');
-        $json = json_decode($raw, true);
-        return is_array($json) ? $json : $_POST;
-    }
-
-    private function json(int $status, bool $success, string $message, array $extra = []): void {
-        http_response_code($status);
-        header('Content-Type: application/json; charset=UTF-8');
-        echo json_encode(array_merge([
-            'success' => $success,
-            'message' => $message
-        ], $extra));
         exit;
-    }
 }
